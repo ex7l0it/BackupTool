@@ -1,0 +1,12 @@
+- name: bashrc
+  srcpath: ~/.bashrc
+  group: 
+- name: vimrc
+  srcpath: ~/.vimrc
+  group: 
+- name: tmux.conf
+  srcpath: ~/.tmux.conf
+  group:
+- name: xxx
+  srcpath: ~/xxx
+  group:
