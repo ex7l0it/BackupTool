@@ -1,13 +1,17 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 #[macro_use]
 extern crate log;
 mod tools;
 use tools::*;
 
 #[derive(Parser, Debug)]
+#[command(author = "Ex7l0it")]
 struct Opts {
     /// Path to config file
     #[arg(short = 'c', long, default_value = "./config.yaml")]
@@ -15,18 +19,15 @@ struct Opts {
     /// Path to backup file
     #[arg(short = 'o', long, default_value = "./bkup/")]
     output: String,
-    #[arg(short, long)]
-    verbose: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct Task {
     name: String,
-    #[serde(deserialize_with = "parse_mypathbuf")]
-    srcpath: MyPathBuf,
+    #[serde(deserialize_with = "parse_mypathbuf", rename="path")]
+    srcpath: Vec<MyPathBuf>,
     #[serde(default)]
     dstpath: Option<MyPathBuf>,
-    group: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -43,7 +44,7 @@ impl FromStr for MyPathBuf {
         if s.starts_with("~/") {
             // Get home directory from std::env
             let home_dir = std::env::var("HOME").unwrap();
-            path = PathBuf::from(s.replace("~", &home_dir));
+            path = PathBuf::from(s.replace('~', &home_dir));
         }
         Ok(Self {
             path_str: s.to_string(),
@@ -66,38 +67,43 @@ impl MyPathBuf {
 
 impl Task {
     // backup processing
-    fn process(&self, opts: &Opts) -> Result<()> {
-        // check if path exists
-        if !self.srcpath.exists() {
-            warn!("Path does not exist: {}", self.srcpath);
-            // Pass
-            return Ok(());
-        }
-        // check if dstpath exists
-        let dstpath = MyPathBuf::from_str(&opts.output)?;
+    fn process_backup(&self, dstpath: &Path) -> Result<()> {
+        // create directory
+        let dstpath = dstpath.join(&self.name);
         if !dstpath.exists() {
-            warn!("creating output directory: {}", dstpath);
-            std::fs::create_dir_all(&dstpath.path)?;
+            warn!("creating task directory: {:?}", dstpath);
+            std::fs::create_dir_all(&dstpath)?;
         }
-        // copy file or directory
-        let srcpath = &self.srcpath.path;
-        let dstpath = dstpath.path.join(srcpath.file_name().unwrap());
-        std::fs::copy(srcpath, dstpath)?;
+        // check if path exists
+        for srcpath in &self.srcpath {
+            if !srcpath.exists() {
+                warn!("Path does not exist: {}", srcpath);
+                continue;
+            }
+            // copy file or directory
+            let dstpath = dstpath.join(srcpath.path.file_name().unwrap());
+            std::fs::copy(&srcpath.path, dstpath).map_err(|e| anyhow!("Copy ERROR: {e}"))?;
+        }
 
         Ok(())
     }
 }
 
-fn parse_mypathbuf<'de, D>(deserializer: D) -> Result<MyPathBuf, D::Error>
+fn parse_mypathbuf<'de, D>(deserializer: D) -> Result<Vec<MyPathBuf>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s: String = serde::Deserialize::deserialize(deserializer)?;
-    Ok(s.parse().unwrap())
+    let s: Vec<String> = serde::Deserialize::deserialize(deserializer)?;
+    let mut v = Vec::new();
+    for i in s {
+        v.push(i.parse().unwrap());
+    }
+    Ok(v)
 }
 
 fn parse_config(path: &str) -> Result<Vec<Task>> {
-    let file = std::fs::File::open(path)?;
+    let file =
+        std::fs::File::open(path).map_err(|e| anyhow!("Open config file Failed: {path} - {e}"))?;
 
     // parse .yaml file
     let configs: Vec<Task> = serde_yaml::from_reader(file)?;
@@ -106,13 +112,42 @@ fn parse_config(path: &str) -> Result<Vec<Task>> {
     Ok(configs)
 }
 
+fn process_backups(tasks: Vec<Task>, opts: &Opts) -> Result<()> {
+    let dstpath = MyPathBuf::from_str(&opts.output)?;
+    if !dstpath.exists() {
+        warn!("creating output directory: {}", dstpath);
+        std::fs::create_dir_all(&dstpath.path)?;
+    }
+    let temp_dir =
+        generate_tempdir(&dstpath.path).map_err(|e| anyhow!("Make Tempdir ERROR: {e}"))?;
+
+    for task in tasks {
+        task.process_backup(&temp_dir)?;
+    }
+    // copy config file to temp directory
+    let config_path = PathBuf::from(&opts.config);
+    std::fs::copy(
+        &config_path,
+        temp_dir.join(config_path.file_name().unwrap()),
+    )
+    .map_err(|e| anyhow!("Copy ERROR: {e}"))?;
+
+    // compress directory
+    let tarfile = compress_tar_gz_target(&temp_dir, &dstpath.path)?;
+    // remove temp directory
+    std::fs::remove_dir_all(&temp_dir).map_err(|e| anyhow!("Remove ERROR: {e}"))?;
+
+    println!("Backup complete: {tarfile:?}");
+
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
     let opts = Opts::parse();
     debug!("{:#?}", opts);
     let tasks = parse_config(&opts.config)?;
-    for task in tasks {
-        task.process(&opts)?;
-    }
+
+    process_backups(tasks, &opts)?;
 
     Ok(())
 }

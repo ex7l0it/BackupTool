@@ -1,12 +1,11 @@
-- name: bashrc
-  srcpath: ~/.bashrc
-  group: 
-- name: vimrc
-  srcpath: ~/.vimrc
-  group: 
-- name: tmux.conf
-  srcpath: ~/.tmux.conf
-  group:
-- name: xxx
-  srcpath: ~/xxx
-  group:
+- name: bash     # 配置文件组名
+  path:          # 当前组中包含的配置文件路径
+    - ~/.bashrc
+- name: vim
+  path: 
+    - ~/.vimrc
+    - ~/.vimrc.custom.config
+    - ~/.vimrc.custom.plugins
+- name: tmux
+  path: 
+    - ~/.tmux.conf
