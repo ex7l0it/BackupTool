@@ -5,7 +5,7 @@
 
 ## Introduction
 
-一个用于备份配置文件的工具 (Linux/MacOS)
+一个轻量的用于备份还原(迁移)配置文件的工具 (Linux/MacOS)
 
 例如：
 
@@ -26,6 +26,7 @@ Options:
   -o, --output <OUTPUT>  Path to backup file [default: ./bkup/]
   -n, --name <NAME>      Custom Archive File Name
   -f, --bkfile <BKFILE>  Path to backup file
+  -g, --group <GROUP>    Group of tasks to backup
   -h, --help             Print help
 ```
 
@@ -71,6 +72,8 @@ cfgbkc backup -c ./config.yaml -o ./bkup/
 
 ```shell
 cfgbkc restore -f ./bkup/backup_20230508_115940_a656cf4f7222b97e.tar.gz
+# 可以使用 --group 指定要还原的分组，以解决权限问题
+# 例如: sudo ./cfgbkc -f ./bkup/backup_20230508_115940_a656cf4f7222b97e.tar.gz -g nginx 
 ```
 
 ## Process
@@ -87,15 +90,18 @@ cfgbkc restore -f ./bkup/backup_20230508_115940_a656cf4f7222b97e.tar.gz
 
 ## TODO
 
-- [ ] ~~增加对重名目标的处理（暂时先不考虑，应该没这种情况吧）~~
+- [x] ~~增加对文件夹的支持~~
+- [x] ~~指定还原某一分组~~
 - [ ] 增加多线程处理
 - [ ] 优化错误处理
+- [ ] 优化代码结构
 - [ ] 搞一个服务器端用来收集备份的数据
-- [ ] 搞一个版本控制？（整合git）
-- [ ] 搞一个GUI
+- [ ] ~~搞一个版本控制？（整合git）~~
+- [ ] ~~搞一个GUI~~
 - [ ] 增加对 Windows 的支持
 
 ## Log
 
 - 2023.5.7: v0.0.1 备份打包基本功能完成
 - 2023.5.8: v0.0.2 还原归档基本功能完成, 完善归档功能
+- 2023.5.8: v0.0.3 基本功能完成

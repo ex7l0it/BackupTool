@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
+use fs_extra::copy_items;
 use prettytable::Table;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,6 +30,9 @@ struct Opts {
     /// Path to backup file
     #[arg(short = 'f', long, group = "m")]
     bkfile: Option<String>,
+    /// Group of tasks to backup
+    #[arg(short = 'g', long)]
+    group: Option<String>,
     /// Mode of operation
     #[arg(value_enum)]
     mode: Mode,
@@ -90,7 +94,7 @@ impl Task {
         // create directory
         let dstpath = dstpath.join(&self.name);
         if !dstpath.exists() {
-            warn!("creating task directory: {:?}", dstpath);
+            debug!("creating task directory: {:?}", dstpath);
             std::fs::create_dir_all(&dstpath)?;
         }
         // check if path exists
@@ -100,27 +104,45 @@ impl Task {
                 continue;
             }
             // copy file or directory
-            let dstpath = dstpath.join(srcpath.path.file_name().unwrap());
-            std::fs::copy(&srcpath.path, dstpath).map_err(|e| anyhow!("Copy ERROR: {e}"))?;
+            let copy_options = fs_extra::dir::CopyOptions::new().copy_inside(true);
+            copy_items(&[&srcpath.path], &dstpath, &copy_options)
+                .map_err(|e| anyhow!("Copy ERROR: {e}"))?;
         }
 
         Ok(())
     }
 
     // restore processing
-    fn restore(&self, backup_dir: &Path, decompress_path: &Path) -> Result<()> {
+    fn restore(
+        &self,
+        backup_dir: &Path,
+        decompress_path: &Path,
+        group: &Option<String>,
+    ) -> Result<()> {
         // backup old config files
         self.backup(backup_dir)?;
         // restore files
         let group_name = &self.name;
+        // Skip if the group name is different
+        if let Some(group) = &group {
+            if group != group_name {
+                return Ok(());
+            }
+        }
         for srcpath in &self.srcpath {
             let file_path = decompress_path
                 .join(group_name)
                 .join(srcpath.path.file_name().unwrap());
             // copy
-            match std::fs::copy(&file_path, &srcpath.path) {
+            let copy_options = fs_extra::dir::CopyOptions::new()
+                .overwrite(true)
+                .copy_inside(true);
+            // Raise the target path to the next level
+            let dst_path = srcpath.path.parent().unwrap();
+
+            match copy_items(&[file_path], dst_path, &copy_options) {
                 Ok(_) => info!("Restore file: {:?}", &srcpath.path),
-                Err(e) => warn!("Restore file failed: {:?} - {}", &srcpath.path, e),
+                Err(e) => error!("Restore file failed: {:?} - {}", &srcpath.path, e),
             }
         }
         Ok(())
@@ -128,11 +150,11 @@ impl Task {
 }
 
 trait TasksInfo {
-    fn dump_tasks(&self, path: &Path);
+    fn dump_tasks(&self, path: &Path, group: &Option<String>);
 }
 
 impl TasksInfo for Vec<Task> {
-    fn dump_tasks(&self, path: &Path) {
+    fn dump_tasks(&self, path: &Path, group: &Option<String>) {
         let mut table = Table::new();
         table.add_row(row!["GroupName", "FileName", "RestorePath", "Status"]);
         for task in self {
@@ -141,7 +163,13 @@ impl TasksInfo for Vec<Task> {
                 let file_name = srcpath.path.file_name().unwrap().to_str().unwrap();
                 let check_target_path = path.join(group_name).join(file_name);
                 let status = if check_target_path.exists() {
-                    "OK"
+                    let mut ret_flag = "OK";
+                    if let Some(group) = &group {
+                        if group != group_name {
+                            ret_flag = "SKIP"
+                        }
+                    }
+                    ret_flag
                 } else {
                     "NG"
                 };
@@ -210,9 +238,9 @@ fn process_backups(tasks: Vec<Task>, opts: &Opts) -> Result<()> {
     Ok(())
 }
 
-fn process_resotres(bkfile: PathBuf) -> Result<()> {
+fn process_resotres(bkfile: PathBuf, group: Option<String>) -> Result<()> {
     // print file create time info
-    println!("Backup file created at: {}", get_file_createtime(&bkfile)?);
+    info!("Backup file created at: {}", get_file_createtime(&bkfile)?);
 
     let decompress_path = decompress_tar_gz_target(&bkfile)?;
     debug!("decompress_path: {:?}", decompress_path);
@@ -221,7 +249,7 @@ fn process_resotres(bkfile: PathBuf) -> Result<()> {
     let tasks = parse_config(config_path.to_str().unwrap())?;
 
     // show tasks infos
-    tasks.dump_tasks(&decompress_path);
+    tasks.dump_tasks(&decompress_path, &group);
 
     // confirm restore
     let mut input = String::new();
@@ -229,13 +257,13 @@ fn process_resotres(bkfile: PathBuf) -> Result<()> {
     std::io::stdout().flush()?;
     std::io::stdin().read_line(&mut input)?;
     if input.trim().to_ascii_lowercase() != "y" && input != "\n" {
-        println!("Canceled.");
+        warn!("Canceled.");
         return Ok(());
     }
 
     let backup_dir = generate_tempdir(&PathBuf::from("/tmp"))?;
     for task in tasks {
-        task.restore(&backup_dir, &decompress_path)?;
+        task.restore(&backup_dir, &decompress_path, &group)?;
     }
     // copy config file to temp directory
     let config_path = decompress_path.join("config.yaml");
@@ -253,7 +281,7 @@ fn process_resotres(bkfile: PathBuf) -> Result<()> {
     std::fs::remove_dir_all(&backup_dir).map_err(|e| anyhow!("Remove ERROR: {e}"))?;
     std::fs::remove_dir_all(&decompress_path).map_err(|e| anyhow!("Remove ERROR: {e}"))?;
 
-    println!("Restore complete. Old files are compressed: {tarfile:?}");
+    warn!("Restore complete. Old files are compressed: {tarfile:?}");
     Ok(())
 }
 
@@ -270,7 +298,7 @@ pub fn run() -> Result<()> {
             info!("Restore mode");
             if let Some(bkfile) = opts.bkfile {
                 let bkfile = MyPathBuf::from_str(&bkfile)?;
-                process_resotres(bkfile.path)?;
+                process_resotres(bkfile.path, opts.group)?;
             } else {
                 eprintln!("bkfile is required");
             }

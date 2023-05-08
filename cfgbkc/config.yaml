@@ -9,3 +9,7 @@
 - name: tmux
   path: 
     - ~/.tmux.conf
+- name: nginx
+  path:
+    - /etc/nginx/sites-available
+    - /etc/nginx/conf.d
