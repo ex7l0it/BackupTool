@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
 use prettytable::Table;
 use serde::{Deserialize, Serialize};
@@ -24,6 +23,9 @@ struct Opts {
     /// Path to backup file
     #[arg(short = 'o', long, default_value = "./bkup/")]
     output: String,
+    /// Custom Archive File Name
+    #[arg(short = 'n', long)]
+    name: Option<String>,
     /// Path to backup file
     #[arg(short = 'f', long, group = "m")]
     bkfile: Option<String>,
@@ -179,8 +181,7 @@ fn process_backups(tasks: Vec<Task>, opts: &Opts) -> Result<()> {
         warn!("creating output directory: {}", dstpath);
         std::fs::create_dir_all(&dstpath.path)?;
     }
-    let temp_dir =
-        generate_tempdir(&dstpath.path).map_err(|e| anyhow!("Make Tempdir ERROR: {e}"))?;
+    let temp_dir = generate_tempdir(&PathBuf::from("/tmp"))?;
 
     for task in tasks {
         task.backup(&temp_dir)?;
@@ -194,7 +195,13 @@ fn process_backups(tasks: Vec<Task>, opts: &Opts) -> Result<()> {
     .map_err(|e| anyhow!("Copy ERROR: {e}"))?;
 
     // compress directory
-    let tarfile = compress_tar_gz_target(&temp_dir, &dstpath.path)?;
+    let mut tar_filename = String::from("backup_");
+    if let Some(custom_name) = &opts.name {
+        tar_filename.push_str(custom_name);
+    } else {
+        tar_filename.push_str(&generate_randname_with_time()?);
+    }
+    let tarfile = compress_tar_gz_target(&temp_dir, &dstpath.path, tar_filename)?;
     // remove temp directory
     std::fs::remove_dir_all(&temp_dir).map_err(|e| anyhow!("Remove ERROR: {e}"))?;
 
@@ -205,14 +212,7 @@ fn process_backups(tasks: Vec<Task>, opts: &Opts) -> Result<()> {
 
 fn process_resotres(bkfile: PathBuf) -> Result<()> {
     // print file create time info
-    let file = std::fs::File::open(&bkfile)
-        .map_err(|e| anyhow!("Open backup tar file ERROR: {bkfile:?} - {e}"))?;
-    let create_time = file.metadata()?.created()?;
-    let datetime: DateTime<Local> = create_time.into();
-    println!(
-        "Backup file created at: {}",
-        datetime.format("%Y-%m-%d %H:%M:%S")
-    );
+    println!("Backup file created at: {}", get_file_createtime(&bkfile)?);
 
     let decompress_path = decompress_tar_gz_target(&bkfile)?;
     debug!("decompress_path: {:?}", decompress_path);
@@ -246,7 +246,8 @@ fn process_resotres(bkfile: PathBuf) -> Result<()> {
     .map_err(|e| anyhow!("Copy ERROR: {e}"))?;
 
     // compress old files
-    let tarfile = compress_tar_gz_target(&backup_dir, &PathBuf::from("./bkup"))?;
+    let tar_filename = format!("restore_bk_{}", generate_randname_with_time()?);
+    let tarfile = compress_tar_gz_target(&backup_dir, &PathBuf::from("./bkup"), tar_filename)?;
 
     // remove temp directory
     std::fs::remove_dir_all(&backup_dir).map_err(|e| anyhow!("Remove ERROR: {e}"))?;
